@@ -98,13 +98,23 @@
             background-color: #a0e9af;
         }
 
-        /* Download Button Style */
-        .download-btn {
-            background-color: #a0e9af;
+        /* Control Buttons */
+        #control-buttons {
+            display: flex;
+            gap: 10px;
             margin-top: 20px;
         }
-        .download-btn:hover {
+        .start-button {
             background-color: #84c4d4;
+            flex: 1;
+        }
+        #stopButton {
+            background-color: #ff6b6b;
+            flex: 1;
+            display: none;
+        }
+        #stopButton:hover {
+            background-color: #ff4f4f;
         }
 
         /* Progress Section */
@@ -116,8 +126,6 @@
             font-size: 1.2rem;
             margin-bottom: 15px;
             color: #84c4d4;
-            opacity: 1 !important;
-            visibility: visible !important;
         }
         .progress-bar {
             width: 100%;
@@ -134,7 +142,7 @@
             transition: width 0.5s ease-in-out;
         }
 
-        /* Today Counter Specific Styles */
+        /* Today Counter */
         .today-counter {
             background-color: #1e2d3d;
             padding: 10px;
@@ -167,18 +175,19 @@
             color: #84c4d4;
         }
 
-        /* New download section styles */
+        /* Download Section */
         #download-section {
             margin-top: 20px;
             padding-top: 20px;
             border-top: 1px solid #333;
+            display: none;
         }
-        #download-section button {
+        .download-btn {
             background-color: #a0e9af;
+            margin-top: 10px;
         }
-        #download-section button:hover {
+        .download-btn:hover {
             background-color: #84c4d4;
-            transform: translateY(-1px);
         }
     </style>
 </head>
@@ -215,23 +224,22 @@
                 <label for="follow_users">Follow users before sending message</label>
             </div>
 
-            <button type="submit">Start Sending DMs</button>
+            <div id="control-buttons">
+                <button type="submit" class="start-button">Start Sending DMs</button>
+                <button type="button" id="stopButton">Stop Process</button>
+            </div>
         </form>
 
         <!-- Progress Section -->
         <div class="progress-section" id="progressSection">
-            <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px;">
-                <!-- Main counter -->
-                <div class="counter">
-                    <span id="current-count">0</span> / <span id="total-count">0</span> messages sent
-                </div>
-                
-                <!-- Today's counter with enhanced visibility -->
-                <div class="counter today-counter">
-                    <span style="color: #a0e9af; font-weight: bold;">
-                        Total DMs sent today: <span id="today-count">0</span>
-                    </span>
-                </div>
+            <!-- Main counter -->
+            <div class="counter">
+                <span id="current-count">0</span> / <span id="total-count">0</span> messages sent
+            </div>
+            
+            <!-- Today's counter -->
+            <div class="today-counter">
+                <span>Total DMs sent today: <span id="today-count">0</span></span>
             </div>
 
             <!-- Progress bar -->
@@ -239,6 +247,7 @@
                 <div id="progress"></div>
             </div>
 
+            <!-- Status table -->
             <table class="status-table">
                 <thead>
                     <tr>
@@ -246,12 +255,11 @@
                         <th>Status</th>
                     </tr>
                 </thead>
-                <tbody id="status-table-body">
-                </tbody>
+                <tbody id="status-table-body"></tbody>
             </table>
 
             <!-- Download Section -->
-            <div id="download-section" style="display: none;">
+            <div id="download-section">
                 <button onclick="downloadRemainingCSV()" class="download-btn">
                     Download Remaining Messages
                 </button>
@@ -260,54 +268,95 @@
     </div>
 
     <script>
-        console.log('Page loaded - script running');
-
-        window.onload = function() {
-        console.log('Window loaded');
-    };
-
+        let isProcessing = false;
         let statusCheckInterval;
         let lastStatus = null;
 
+        document.getElementById('bulkDmForm').onsubmit = function(e) {
+            e.preventDefault();
+            
+            if (isProcessing) return;
+            
+            isProcessing = true;
+            document.getElementById('stopButton').style.display = 'block';
+            document.getElementById('progressSection').style.display = 'block';
+            document.getElementById('download-section').style.display = 'none';
+            
+            const formData = new FormData(this);
+            formData.append('follow_users', document.getElementById('follow_users').checked);
+
+            fetch('/reset_status', { method: 'POST' })
+            .then(() => {
+                statusCheckInterval = setInterval(updateProgress, 2000);
+                return fetch('/send_bulk_dms', {
+                    method: 'POST',
+                    body: formData
+                });
+            })
+            .then(response => response.json())
+            .then(data => {
+                updateProgress();
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                stopProcess();
+            });
+        };
+
+        document.getElementById('stopButton').onclick = function() {
+            if (confirm('Are you sure you want to stop the process? You can download remaining messages after stopping.')) {
+                stopProcess();
+            }
+        };
+
+        function stopProcess() {
+            isProcessing = false;
+            clearInterval(statusCheckInterval);
+            document.getElementById('stopButton').style.display = 'none';
+            document.getElementById('download-section').style.display = 'block';
+            
+            fetch('/stop_process', { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Process stopped:', data);
+                updateProgress();
+            })
+            .catch(error => console.error('Error stopping process:', error));
+        }
+
         function downloadRemainingCSV() {
             fetch('/get_remaining_messages')
-                .then(response => response.blob())
-                .then(blob => {
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'remaining_messages.csv';
-                    document.body.appendChild(a);
-                    a.click();
-                    window.URL.revokeObjectURL(url);
-                })
-                .catch(error => {
-                    console.error('Error downloading CSV:', error);
-                    alert('Error downloading remaining messages. Please try again.');
-                });
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.blob();
+            })
+            .then(blob => {
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'remaining_messages.csv';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                a.remove();
+            })
+            .catch(error => {
+                console.error('Error downloading CSV:', error);
+                alert('Error downloading remaining messages. Please try again.');
+            });
         }
-    
+
         function updateProgress() {
-    console.warn('Starting update check...'); // Debug line
-    fetch('/get_current_status')
-        .then(response => {
-            console.log('Got response:', response); // Debug line
-            return response.json();
-        })
-        .then(data => {
-            console.log('Parsed data:', data); // Debug line
-            
-            if (JSON.stringify(data) !== JSON.stringify(lastStatus)) {
-                console.log('Status changed!'); // Debug line
-                console.log('Old status:', lastStatus); // Debug line
-                console.log('New status:', data); // Debug line
-                
+            fetch('/get_current_status')
+            .then(response => response.json())
+            .then(data => {
                 document.getElementById('current-count').textContent = data.current;
                 document.getElementById('total-count').textContent = data.total;
                 document.getElementById('today-count').textContent = data.today_count || 0;
                 
                 const percentage = (data.current / data.total) * 100 || 0;
-                console.log('Progress percentage:', percentage); // Debug line
                 document.getElementById('progress').style.width = percentage + '%';
                 
                 const tableBody = document.getElementById('status-table-body');
@@ -322,64 +371,19 @@
                     tableBody.appendChild(row);
                 });
 
-                lastStatus = data;
-
-                if (data.current >= data.total && data.total > 0) {
-                console.warn('PROCESS COMPLETE - TRYING TO SHOW BUTTON');  // Debug log
-                clearInterval(statusCheckInterval);
-                const downloadSection = document.getElementById('download-section');
-                downloadSection.style.display = 'block';
-                // Force button visibility
-                const downloadButton = downloadSection.querySelector('button');
-                if (downloadButton) {
-                    downloadButton.style.display = 'block';
-                    console.warn('Button should be visible now');  // Debug log
+                // Show download button if process is complete or stopped
+                if (!isProcessing || (data.current >= data.total && data.total > 0)) {
+                    document.getElementById('download-section').style.display = 'block';
+                    document.getElementById('stopButton').style.display = 'none';
                 }
-                // Check if section is actually displayed
-                console.warn('Download section display style:', downloadSection.style.display);
-            }
-        
-            } else {
-                console.log('No status change detected'); // Debug line
-            }
-        })
-        .catch(error => {
-            console.error('Error in update:', error); // Debug line
-            clearInterval(statusCheckInterval);
-        });
-}
-        document.getElementById('bulkDmForm').onsubmit = function(e) {
-            console.warn('Form submitted!');  // Added immediate feedback
-            e.preventDefault();
 
-            console.log('Form submitted - starting DM process');
-            
-            const formData = new FormData(this);
-            formData.append('follow_users', document.getElementById('follow_users').checked);
-    
-            fetch('/reset_status', { 
-                method: 'POST' 
-            })
-            .then(() => {
-                document.getElementById('progressSection').style.display = 'block';
-                document.getElementById('download-section').style.display = 'none';
-                statusCheckInterval = setInterval(updateProgress, 2000);
-                
-                return fetch('/send_bulk_dms', {
-                    method: 'POST',
-                    body: formData
-                });
-            })
-            .then(response => response.json())
-            .then(data => {
-                updateProgress();
+                lastStatus = data;
             })
             .catch(error => {
-                console.error('Error:', error);
+                console.error('Error in update:', error);
                 clearInterval(statusCheckInterval);
-                alert('Error occurred while sending messages. Please try again.');
             });
-        };
+        }
     </script>
 </body>
 </html>
